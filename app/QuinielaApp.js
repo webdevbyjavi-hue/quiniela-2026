@@ -53,25 +53,36 @@ function Splash() {
 // ── Login ─────────────────────────────────────────────────────
 
 function LoginPage() {
-  const [email,   setEmail]   = useState('')
-  const [nombre,  setNombre]  = useState('')
-  const [sent,    setSent]    = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState(null)
+  const [mode,     setMode]     = useState('login') // 'login' | 'register'
+  const [nombre,   setNombre]   = useState('')
+  const [email,    setEmail]    = useState('')
+  const [password, setPassword] = useState('')
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState(null)
+  const [sent,     setSent]     = useState(false)
+
+  function switchMode(m) {
+    setMode(m)
+    setError(null)
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
     setLoading(true)
     setError(null)
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        data: { nombre: nombre.trim() || email.split('@')[0] },
-        emailRedirectTo: window.location.origin,
-      },
-    })
-    if (error) { setError(error.message); setLoading(false) }
-    else        setSent(true)
+
+    if (mode === 'register') {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { nombre: nombre.trim() || email.split('@')[0] } },
+      })
+      if (error) { setError(error.message); setLoading(false) }
+      else        setSent(true)
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) { setError(error.message); setLoading(false) }
+    }
   }
 
   if (sent) {
@@ -79,10 +90,10 @@ function LoginPage() {
       <div className="login-bg">
         <div className="login-card">
           <div className="login-sent-icon">📬</div>
-          <h2 className="login-sent-title">Revisa tu correo</h2>
+          <h2 className="login-sent-title">Confirma tu correo</h2>
           <p className="login-sent-sub">
-            Enviamos un enlace a <strong>{email}</strong>.<br />
-            Da clic en el enlace para entrar — revisa spam también.
+            Enviamos un enlace de confirmación a <strong>{email}</strong>.<br />
+            Da clic en el enlace para activar tu cuenta — revisa spam también.
           </p>
         </div>
       </div>
@@ -97,19 +108,37 @@ function LoginPage() {
         <p className="login-sub">Copa Mundial de Fútbol</p>
       </div>
       <div className="login-card">
+        <div className="login-mode-tabs">
+          <button
+            type="button"
+            className={`login-mode-tab${mode === 'login' ? ' active' : ''}`}
+            onClick={() => switchMode('login')}
+          >
+            Entrar
+          </button>
+          <button
+            type="button"
+            className={`login-mode-tab${mode === 'register' ? ' active' : ''}`}
+            onClick={() => switchMode('register')}
+          >
+            Crear cuenta
+          </button>
+        </div>
         <form onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="nombre">Tu nombre</label>
-            <input
-              id="nombre"
-              type="text"
-              value={nombre}
-              onChange={e => setNombre(e.target.value)}
-              placeholder="Ej. Juan García"
-              required
-              autoComplete="name"
-            />
-          </div>
+          {mode === 'register' && (
+            <div className="field">
+              <label htmlFor="nombre">Tu nombre</label>
+              <input
+                id="nombre"
+                type="text"
+                value={nombre}
+                onChange={e => setNombre(e.target.value)}
+                placeholder="Ej. Juan García"
+                required
+                autoComplete="name"
+              />
+            </div>
+          )}
           <div className="field">
             <label htmlFor="email">Correo electrónico</label>
             <input
@@ -123,9 +152,25 @@ function LoginPage() {
               inputMode="email"
             />
           </div>
+          <div className="field">
+            <label htmlFor="password">Contraseña</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder={mode === 'register' ? 'Mínimo 6 caracteres' : ''}
+              required
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              minLength={mode === 'register' ? 6 : undefined}
+            />
+          </div>
           {error && <p className="field-error">{error}</p>}
           <button className="btn-primary" type="submit" disabled={loading}>
-            {loading ? 'Enviando…' : 'Entrar con enlace mágico'}
+            {loading
+              ? (mode === 'register' ? 'Creando cuenta…' : 'Entrando…')
+              : (mode === 'register' ? 'Crear cuenta' : 'Entrar')
+            }
           </button>
         </form>
       </div>

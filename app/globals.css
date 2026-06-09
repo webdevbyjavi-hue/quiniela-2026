@@ -116,6 +116,35 @@ body {
 }
 .login-sent-sub strong { color: var(--text); }
 
+/* ── Login mode tabs ─────────────────────────────────────────── */
+.login-mode-tabs {
+  display: flex;
+  background: var(--surf2);
+  border-radius: var(--r-sm);
+  padding: 3px;
+  margin-bottom: 1.25rem;
+  gap: 3px;
+}
+.login-mode-tab {
+  flex: 1;
+  padding: .55rem;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  font-size: .8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text3);
+  cursor: pointer;
+  min-height: 40px;
+  transition: background .15s, color .15s;
+}
+.login-mode-tab.active {
+  background: var(--surf3);
+  color: var(--text);
+}
+
 .field { margin-bottom: 1rem; }
 .field label {
   display: block;
