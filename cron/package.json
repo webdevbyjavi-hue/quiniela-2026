@@ -1,0 +1,12 @@
+{
+  "name": "quiniela-2026-cron",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node update-results.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
