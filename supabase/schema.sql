@@ -41,6 +41,12 @@ create index if not exists idx_predictions_user_id  on public.predictions(user_i
 create index if not exists idx_predictions_match_id on public.predictions(match_id);
 create index if not exists idx_matches_estado       on public.matches(estado);
 
+-- ── Realtime ─────────────────────────────────────────────────
+-- Required so clients get postgres_changes UPDATE events when the cron
+-- flips matches.estado (en_vivo / finalizado) without a page refresh.
+
+alter publication supabase_realtime add table public.matches;
+
 -- ── App config ───────────────────────────────────────────────
 -- Single source of truth for the global predictions lock time.
 -- Used by both the client and the predictions RLS policies below.

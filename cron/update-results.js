@@ -113,11 +113,13 @@ function classifyStatus(provider, rawStatus) {
   if (provider === 'football-data') {
     if (rawStatus === 'FINISHED') return 'FINISHED'
     if (rawStatus === 'IN_PLAY' || rawStatus === 'PAUSED') return 'LIVE'
+    if (rawStatus === 'SCHEDULED' || rawStatus === 'TIMED') return 'NOT_STARTED'
     return 'OTHER'
   }
   // api-football short codes
   if (['FT', 'AET', 'PEN'].includes(rawStatus)) return 'FINISHED'
   if (['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE', 'INT'].includes(rawStatus)) return 'LIVE'
+  if (['NS', 'TBD'].includes(rawStatus)) return 'NOT_STARTED'
   return 'OTHER'
 }
 
@@ -239,7 +241,11 @@ async function main() {
       } else {
         log('info', `  → ✓ Match #${match.id} ${match.equipo_local} vs ${match.equipo_visita}: ${result.homeScore}–${result.awayScore}`)
       }
-    } else if (result.status === 'LIVE') {
+    } else if (result.status === 'LIVE' || result.status === 'NOT_STARTED') {
+      // `pending` already filters fecha_hora < now, so a NOT_STARTED match
+      // here has kicked off but the provider hasn't flipped to IN_PLAY yet
+      // (observed lag of several hours on football-data's free tier).
+      // Treat it as live so the UI badge isn't stuck on "pendiente".
       if (match.estado !== 'en_vivo') {
         const { error: updErr } = await supabase
           .from('matches')
