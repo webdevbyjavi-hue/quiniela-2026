@@ -2,7 +2,7 @@
   "name": "quiniela-2026-cron",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "start": "node update-results.js"
   },
