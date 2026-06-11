@@ -2,7 +2,7 @@
 /**
  * Quiniela 2026 — Result updater cron
  *
- * Runs on a schedule (Render Cron Job, e.g. every 5-10 min).
+ * Runs on a schedule (GitHub Actions, e.g. every 5 min).
  *
  * Smart polling strategy:
  *   1. Ask Supabase which matches are still pending, have an
@@ -14,7 +14,7 @@
  *   4. FINISHED matches -> set_match_result(). IN_PLAY/PAUSED matches ->
  *      mark estado='en_vivo' (no extra requests, same response).
  *
- * Required env vars (set in Render environment):
+ * Required env vars (set as GitHub repo secrets):
  *   SUPABASE_URL               — your project URL
  *   SUPABASE_SERVICE_ROLE_KEY  — service role key (never expose client-side)
  *   PROVIDER                   — 'football-data' (default) | 'api-football'

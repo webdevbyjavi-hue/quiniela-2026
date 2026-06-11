@@ -1,6 +1,6 @@
 # Quiniela Copa Mundial 2026
 
-Pool de pronósticos 1X2 para los 72 partidos de la fase de grupos. Stack: Next.js (App Router) en Vercel + Supabase (Postgres + Auth) + cron Node.js en Render.
+Pool de pronósticos 1X2 para los 72 partidos de la fase de grupos. Stack: Next.js (App Router) en Vercel + Supabase (Postgres + Auth) + cron Node.js en GitHub Actions.
 
 ---
 
@@ -8,6 +8,9 @@ Pool de pronósticos 1X2 para los 72 partidos de la fase de grupos. Stack: Next.
 
 ```
 quiniela-2026/
+├── .github/
+│   └── workflows/
+│       └── update-results.yml  # Cron de resultados (cada 5 min)
 ├── app/
 │   ├── layout.js          # HTML shell, metadata
 │   ├── page.js            # UI completa (client component)
@@ -117,28 +120,31 @@ npm run dev
 
 ---
 
-## 5. Deploy del cron en Render
+## 5. Cron en GitHub Actions
 
-El cron está en `cron/` y es un **Node.js background worker** que Render ejecuta en un horario.
+El cron está en `cron/` y se ejecuta vía **GitHub Actions** (`.github/workflows/update-results.yml`),
+con `schedule: '*/5 * * * *'` (cada 5 min) y `workflow_dispatch` para ejecutarlo manualmente
+desde la pestaña **Actions** del repo. Es gratis para repos públicos.
 
-1. Crea una cuenta en [render.com](https://render.com)
-2. New → **Cron Job**
-3. Conecta el mismo repositorio
-4. Configuración:
-   | Campo | Valor |
-   |---|---|
-   | **Name** | `quiniela-cron` |
-   | **Root Directory** | `cron` |
-   | **Runtime** | Node |
-   | **Build Command** | `npm install` |
-   | **Start Command** | `node update-results.js` |
-   | **Schedule** | `*/5 * * * *` (cada 5 min) |
+### Configurar secrets
 
-5. En **Environment Variables**, agrega:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `PROVIDER` = `football-data`
-   - `FOOTBALL_DATA_API_KEY`
+Ve a **Settings → Secrets and variables → Actions → New repository secret** y agrega:
+
+| Secret | Valor |
+|---|---|
+| `SUPABASE_URL` | tu Project URL de Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | tu service_role key de Supabase |
+| `FOOTBALL_DATA_API_KEY` | tu API key de football-data.org |
+
+`PROVIDER` está fijado a `football-data` directamente en el workflow (no es secreto).
+
+### Notas sobre GitHub Actions
+
+- Los workflows programados son "best effort": GitHub puede retrasar la ejecución en
+  momentos de alta carga. No es un problema aquí porque el script revisa **todos** los
+  partidos pendientes con kickoff pasado, así que cualquier ejecución se pone al día.
+- Si el repositorio pasa **60 días sin commits**, GitHub desactiva automáticamente los
+  workflows programados. Un commit cualquiera lo reactiva.
 
 ### Polling inteligente
 
@@ -160,8 +166,9 @@ Con `*/5 * * * *` esto nunca excede ~1 petición cada 5 minutos durante los part
 ### Cambiar de proveedor
 
 Para usar API-Football en vez de football-data.org:
-1. Cambia `PROVIDER=api-football` en Render
-2. Agrega `API_FOOTBALL_KEY` con tu clave de RapidAPI
+1. Cambia `PROVIDER: api-football` en `.github/workflows/update-results.yml`
+2. Agrega el secret `API_FOOTBALL_KEY` con tu clave de RapidAPI y referencia
+   `${{ secrets.API_FOOTBALL_KEY }}` en el workflow
 3. Actualiza `api_fixture_id` con los IDs de API-Football (distintos a los de football-data.org)
 
 ---
@@ -179,7 +186,7 @@ Vercel (Next.js)
 Supabase (Postgres + Auth)
   │  service_role key
   ▼
-Render Cron (cada 5 min)
+GitHub Actions Cron (cada 5 min)
   │  si hay partidos pendientes con kickoff pasado:
   │    1 petición bulk a football-data.org (rango de fechas)
   ├─ FINISHED  → set_match_result()  (resultado + leaderboard se recalculan solos)
