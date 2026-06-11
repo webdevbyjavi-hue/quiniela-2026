@@ -14,6 +14,12 @@
   --gold:       #ffd60a;
   --gold-dim:   rgba(255,214,10,.12);
 
+  --red:        #ff5252;
+  --red-dim:    rgba(255,82,82,.12);
+
+  --blue:       #3b82f6;
+  --blue-dim:   rgba(59,130,246,.12);
+
   --live:       #ff4d4f;
 
   --text:       #e2e8f0;
@@ -320,6 +326,21 @@ body {
   letter-spacing: .07em;
 }
 
+/* ── Global lock banner ─────────────────────────────────────── */
+.lock-banner {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  background: var(--gold-dim);
+  border: 1px solid rgba(255,214,10,.28);
+  color: var(--gold);
+  font-size: .75rem;
+  font-weight: 700;
+  padding: .65rem .875rem;
+  border-radius: var(--r-sm);
+  margin-bottom: 1rem;
+}
+
 /* ── Progress ────────────────────────────────────────────────── */
 .progress-bar-wrap {
   height: 3px;
@@ -545,11 +566,11 @@ body {
 
 /* Selected */
 .pick-btn.sel {
-  background: var(--green-dim);
-  border-color: var(--green);
+  background: var(--blue-dim);
+  border-color: var(--blue);
 }
-.pick-btn.sel .pick-type-lbl { color: rgba(0,230,118,.65); }
-.pick-btn.sel .pick-team-lbl { color: var(--green); }
+.pick-btn.sel .pick-type-lbl { color: rgba(59,130,246,.65); }
+.pick-btn.sel .pick-team-lbl { color: var(--blue); }
 
 /* Actual result */
 .pick-btn.actual {
@@ -561,17 +582,26 @@ body {
 
 /* Correct pick */
 .pick-btn.correct {
-  background: var(--gold-dim);
-  border-color: var(--gold);
+  background: var(--green-dim);
+  border-color: var(--green);
   border-width: 2px;
 }
-.pick-btn.correct .pick-type-lbl { color: rgba(255,214,10,.7); }
-.pick-btn.correct .pick-team-lbl { color: var(--gold); }
+.pick-btn.correct .pick-type-lbl { color: rgba(0,230,118,.7); }
+.pick-btn.correct .pick-team-lbl { color: var(--green); }
+
+/* Incorrect pick */
+.pick-btn.wrong {
+  background: var(--red-dim);
+  border-color: var(--red);
+  border-width: 2px;
+}
+.pick-btn.wrong .pick-type-lbl { color: rgba(255,82,82,.7); }
+.pick-btn.wrong .pick-team-lbl { color: var(--red); }
 
 .pick-correct-badge {
   font-size: .6rem;
   font-weight: 900;
-  color: var(--gold);
+  color: var(--green);
   line-height: 1;
 }
 

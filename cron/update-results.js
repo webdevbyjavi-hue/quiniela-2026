@@ -2,9 +2,17 @@
 /**
  * Quiniela 2026 — Result updater cron
  *
- * Runs on a schedule (Render Cron Job, e.g. every 10 min during match windows).
- * Fetches final scores from the configured provider and calls set_match_result()
- * on Supabase for any match that just finished.
+ * Runs on a schedule (Render Cron Job, e.g. every 5-10 min).
+ *
+ * Smart polling strategy:
+ *   1. Ask Supabase which matches are still pending, have an
+ *      api_fixture_id, and whose kickoff has already passed.
+ *   2. If there are none, exit immediately — zero API requests.
+ *   3. Otherwise make ONE bulk request covering the date range of those
+ *      matches (instead of one request per match), respecting the
+ *      football-data.org free tier limit of 10 req/min.
+ *   4. FINISHED matches -> set_match_result(). IN_PLAY/PAUSED matches ->
+ *      mark estado='en_vivo' (no extra requests, same response).
  *
  * Required env vars (set in Render environment):
  *   SUPABASE_URL               — your project URL
@@ -14,7 +22,7 @@
  *   API_FOOTBALL_KEY           — X-RapidAPI-Key for api-football (RapidAPI)
  *
  * NOTE: api_fixture_id must be populated in the matches table before this
- * cron can resolve results. See README for population options.
+ * cron can resolve results. See scripts/populate-fixture-ids.js.
  */
 
 'use strict'
@@ -30,82 +38,104 @@ const supabase = createClient(
 )
 
 // ── Provider interface ────────────────────────────────────────
-// Each provider must return: { status: 'FINISHED'|'LIVE'|'OTHER', homeScore, awayScore }
+// Each provider must return a Map<api_fixture_id, { status: 'FINISHED'|'LIVE'|'OTHER', homeScore, awayScore }>
 
 const providers = {
   /**
    * football-data.org free tier
    * Docs: https://www.football-data.org/documentation/quickstart
-   * Rate limit: 10 req/min (free). Respects Retry-After on 429.
+   * Rate limit: 10 req/min (free). One request covers the whole date range.
    */
   'football-data': {
-    async getMatch(fixtureId) {
+    async getResults(pending) {
+      const { dateFrom, dateTo } = dateRange(pending)
       const res = await fetchWithBackoff(
-        `https://api.football-data.org/v4/matches/${fixtureId}`,
-        {
-          headers: {
-            'X-Auth-Token': process.env.FOOTBALL_DATA_API_KEY,
-          },
-        }
+        `https://api.football-data.org/v4/competitions/WC/matches?dateFrom=${dateFrom}&dateTo=${dateTo}`,
+        { headers: { 'X-Auth-Token': process.env.FOOTBALL_DATA_API_KEY } }
       )
-      if (!res) return null
+      if (!res) return new Map()
 
-      // Validate expected shape before using
-      const { status, score } = res
-      if (typeof status !== 'string') {
-        log('warn', `football-data: unexpected shape for fixture ${fixtureId}`, res)
-        return null
+      const map = new Map()
+      for (const m of res.matches || []) {
+        map.set(m.id, {
+          status:    classifyStatus('football-data', m.status),
+          homeScore: m.score?.fullTime?.home,
+          awayScore: m.score?.fullTime?.away,
+        })
       }
-
-      if (status !== 'FINISHED') return { status: 'OTHER' }
-
-      const home = score?.fullTime?.home
-      const away = score?.fullTime?.away
-      if (home == null || away == null) {
-        log('warn', `football-data: missing fullTime scores for fixture ${fixtureId}`)
-        return null
-      }
-
-      return { status: 'FINISHED', homeScore: home, awayScore: away }
+      return map
     },
   },
 
   /**
    * API-Football (via RapidAPI) — swap PROVIDER=api-football to use
    * Docs: https://www.api-football.com/documentation-v3
+   * Bulk lookup: /fixtures?ids=1-2-3 (up to 20 IDs per request)
    */
   'api-football': {
-    async getMatch(fixtureId) {
-      const res = await fetchWithBackoff(
-        `https://v3.football.api-sports.io/fixtures?id=${fixtureId}`,
-        {
-          headers: {
-            'X-RapidAPI-Key':  process.env.API_FOOTBALL_KEY,
-            'X-RapidAPI-Host': 'v3.football.api-sports.io',
-          },
+    async getResults(pending) {
+      const map = new Map()
+      const ids = pending.map(m => m.api_fixture_id)
+
+      for (let i = 0; i < ids.length; i += 20) {
+        const chunk = ids.slice(i, i + 20)
+        const res = await fetchWithBackoff(
+          `https://v3.football.api-sports.io/fixtures?ids=${chunk.join('-')}`,
+          {
+            headers: {
+              'X-RapidAPI-Key':  process.env.API_FOOTBALL_KEY,
+              'X-RapidAPI-Host': 'v3.football.api-sports.io',
+            },
+          }
+        )
+        if (!res) continue
+
+        for (const fixture of res.response || []) {
+          const id = fixture?.fixture?.id
+          if (id == null) continue
+          map.set(id, {
+            status:    classifyStatus('api-football', fixture?.fixture?.status?.short),
+            homeScore: fixture?.goals?.home,
+            awayScore: fixture?.goals?.away,
+          })
         }
-      )
-      if (!res) return null
 
-      const fixture = res?.response?.[0]
-      if (!fixture) {
-        log('warn', `api-football: no fixture found for id ${fixtureId}`)
-        return null
+        if (i + 20 < ids.length) await sleep(1000)
       }
-
-      const shortStatus = fixture?.fixture?.status?.short
-      if (shortStatus !== 'FT') return { status: 'OTHER' }
-
-      const home = fixture?.goals?.home
-      const away = fixture?.goals?.away
-      if (home == null || away == null) {
-        log('warn', `api-football: missing goals for fixture ${fixtureId}`)
-        return null
-      }
-
-      return { status: 'FINISHED', homeScore: home, awayScore: away }
+      return map
     },
   },
+}
+
+// ── Status classification ────────────────────────────────────
+
+function classifyStatus(provider, rawStatus) {
+  if (provider === 'football-data') {
+    if (rawStatus === 'FINISHED') return 'FINISHED'
+    if (rawStatus === 'IN_PLAY' || rawStatus === 'PAUSED') return 'LIVE'
+    return 'OTHER'
+  }
+  // api-football short codes
+  if (['FT', 'AET', 'PEN'].includes(rawStatus)) return 'FINISHED'
+  if (['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE', 'INT'].includes(rawStatus)) return 'LIVE'
+  return 'OTHER'
+}
+
+// ── Date range helper ────────────────────────────────────────
+// Covers the kickoff dates of all pending matches, with a 1-day buffer on
+// each side to avoid UTC date-boundary edge cases.
+
+function dateRange(pending) {
+  const dates = pending.map(m => new Date(m.fecha_hora).toISOString().slice(0, 10))
+  const min = dates.reduce((a, b) => (a < b ? a : b))
+  const max = dates.reduce((a, b) => (a > b ? a : b))
+  return { dateFrom: addDays(min, -1), dateTo: addDays(max, 1) }
+}
+
+function addDays(dateStr, days) {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 // ── HTTP helper with 429 backoff ─────────────────────────────
@@ -163,64 +193,78 @@ async function main() {
 
   log('info', `Running with provider: ${provider}`)
 
-  // Fetch matches that are not yet finalizado AND have a fixture ID AND kickoff has passed
+  // Matches that are not yet finalizado AND have a fixture ID AND kickoff has passed
   const now = new Date().toISOString()
-  const { data: matches, error: fetchErr } = await supabase
+  const { data: pending, error: fetchErr } = await supabase
     .from('matches')
-    .select('id, equipo_local, equipo_visita, api_fixture_id, fecha_hora')
+    .select('id, equipo_local, equipo_visita, api_fixture_id, fecha_hora, estado')
     .neq('estado', 'finalizado')
     .not('api_fixture_id', 'is', null)
-    .lt('fecha_hora', now)  // only matches whose kickoff has already passed
+    .lt('fecha_hora', now)
 
   if (fetchErr) {
     log('error', 'Failed to fetch matches from Supabase:', fetchErr.message)
     process.exit(1)
   }
 
-  if (!matches || matches.length === 0) {
-    log('info', 'No pending matches to check.')
+  if (!pending || pending.length === 0) {
+    log('info', 'No pending matches — skipping API call.')
     return
   }
 
-  log('info', `Checking ${matches.length} match(es)…`)
+  log('info', `Checking ${pending.length} match(es) with a single bulk request…`)
+  const results = await providers[provider].getResults(pending)
 
-  for (const match of matches) {
-    log('info', `  #${match.id} ${match.equipo_local} vs ${match.equipo_visita} (fixture ${match.api_fixture_id})`)
-
-    const result = await providers[provider].getMatch(match.api_fixture_id)
-
+  for (const match of pending) {
+    const result = results.get(match.api_fixture_id)
     if (!result) {
-      log('warn', `  → No result returned for match #${match.id}, skipping.`)
+      log('warn', `  → No data for match #${match.id} (fixture ${match.api_fixture_id})`)
       continue
     }
 
-    if (result.status !== 'FINISHED') {
-      log('info', `  → Status: ${result.status}, not finished yet.`)
-      continue
-    }
+    if (result.status === 'FINISHED') {
+      if (result.homeScore == null || result.awayScore == null) {
+        log('warn', `  → Match #${match.id} reported FINISHED but missing scores, skipping.`)
+        continue
+      }
 
-    const { error: rpcErr } = await supabase.rpc('set_match_result', {
-      p_match_id:     match.id,
-      p_goles_local:  result.homeScore,
-      p_goles_visita: result.awayScore,
-    })
+      const { error: rpcErr } = await supabase.rpc('set_match_result', {
+        p_match_id:     match.id,
+        p_goles_local:  result.homeScore,
+        p_goles_visita: result.awayScore,
+      })
 
-    if (rpcErr) {
-      log('error', `  → Failed to write result for match #${match.id}:`, rpcErr.message)
+      if (rpcErr) {
+        log('error', `  → Failed to write result for match #${match.id}:`, rpcErr.message)
+      } else {
+        log('info', `  → ✓ Match #${match.id} ${match.equipo_local} vs ${match.equipo_visita}: ${result.homeScore}–${result.awayScore}`)
+      }
+    } else if (result.status === 'LIVE') {
+      if (match.estado !== 'en_vivo') {
+        const { error: updErr } = await supabase
+          .from('matches')
+          .update({ estado: 'en_vivo', updated_at: new Date().toISOString() })
+          .eq('id', match.id)
+
+        if (updErr) {
+          log('error', `  → Failed to mark match #${match.id} as en_vivo:`, updErr.message)
+        } else {
+          log('info', `  → ● Match #${match.id} ${match.equipo_local} vs ${match.equipo_visita} is live`)
+        }
+      }
     } else {
-      log('info', `  → ✓ Match #${match.id}: ${result.homeScore}–${result.awayScore}`)
-    }
-
-    // Respect free-tier rate limits: 1 request every ~6s = 10 req/min
-    if (matches.indexOf(match) < matches.length - 1) {
-      await sleep(6500)
+      log('info', `  → Match #${match.id}: status ${result.status}, not finished yet.`)
     }
   }
 
   log('info', 'Done.')
 }
 
-main().catch(err => {
-  log('error', 'Unhandled error:', err)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch(err => {
+    log('error', 'Unhandled error:', err)
+    process.exit(1)
+  })
+}
+
+module.exports = { providers, classifyStatus, dateRange }

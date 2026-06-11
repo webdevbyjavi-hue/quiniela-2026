@@ -41,6 +41,19 @@ create index if not exists idx_predictions_user_id  on public.predictions(user_i
 create index if not exists idx_predictions_match_id on public.predictions(match_id);
 create index if not exists idx_matches_estado       on public.matches(estado);
 
+-- ── App config ───────────────────────────────────────────────
+-- Single source of truth for the global predictions lock time.
+-- Used by both the client and the predictions RLS policies below.
+
+create table if not exists public.app_config (
+  key   text primary key,
+  value text not null
+);
+
+insert into public.app_config (key, value) values
+  ('predictions_lock_at', '2026-06-11T17:00:00Z')  -- 11:00 AM Mountain Time (MDT, UTC-6)
+on conflict (key) do nothing;
+
 -- ── Leaderboard view ─────────────────────────────────────────
 
 create or replace view public.leaderboard as
@@ -70,17 +83,20 @@ grant select           on public.matches     to authenticated;
 grant select           on public.predictions to authenticated;
 grant insert, update   on public.predictions to authenticated;
 grant select           on public.leaderboard to authenticated;
+grant select           on public.app_config  to authenticated;
 
 -- service_role bypasses RLS; grant full access for cron writes
 grant all on public.matches     to service_role;
 grant all on public.predictions to service_role;
 grant all on public.profiles    to service_role;
+grant all on public.app_config  to service_role;
 
 -- ── Row Level Security ───────────────────────────────────────
 
 alter table public.profiles    enable row level security;
 alter table public.matches     enable row level security;
 alter table public.predictions enable row level security;
+alter table public.app_config  enable row level security;
 
 -- profiles
 create policy "profiles_select"
@@ -96,15 +112,22 @@ create policy "profiles_update"
 create policy "matches_select"
   on public.matches for select to authenticated using (true);
 
+-- app_config — read-only for clients
+create policy "app_config_select"
+  on public.app_config for select to authenticated using (true);
+
 -- predictions — anyone can see picks after lock
 create policy "predictions_select"
   on public.predictions for select to authenticated using (true);
 
--- predictions — insert only own row, only before kickoff
+-- predictions — insert only own row, only before kickoff and before the
+-- global predictions lock (app_config.predictions_lock_at)
+drop policy if exists "predictions_insert" on public.predictions;
 create policy "predictions_insert"
   on public.predictions for insert to authenticated
   with check (
     auth.uid() = user_id
+    and now() < (select value::timestamptz from public.app_config where key = 'predictions_lock_at')
     and exists (
       select 1 from public.matches m
       where m.id     = match_id
@@ -113,11 +136,14 @@ create policy "predictions_insert"
     )
   );
 
--- predictions — update only own row, only before kickoff
+-- predictions — update only own row, only before kickoff and before the
+-- global predictions lock (app_config.predictions_lock_at)
+drop policy if exists "predictions_update" on public.predictions;
 create policy "predictions_update"
   on public.predictions for update to authenticated
   using (
     auth.uid() = user_id
+    and now() < (select value::timestamptz from public.app_config where key = 'predictions_lock_at')
     and exists (
       select 1 from public.matches m
       where m.id     = match_id
@@ -127,6 +153,7 @@ create policy "predictions_update"
   )
   with check (
     auth.uid() = user_id
+    and now() < (select value::timestamptz from public.app_config where key = 'predictions_lock_at')
     and exists (
       select 1 from public.matches m
       where m.id     = match_id

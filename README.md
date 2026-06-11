@@ -15,8 +15,10 @@ quiniela-2026/
 ├── lib/
 │   └── supabaseClient.js  # Cliente Supabase (anon key)
 ├── cron/
-│   ├── update-results.js  # Script de actualización de resultados
+│   ├── update-results.js  # Script de actualización de resultados (polling inteligente)
 │   └── package.json
+├── scripts/
+│   └── populate-fixture-ids.js  # Script único: empareja partidos con IDs de football-data.org
 ├── supabase/
 │   └── schema.sql         # Schema + seed de 72 partidos
 ├── .env.example
@@ -50,19 +52,22 @@ Esto crea las tablas, índices, vista `leaderboard`, RLS, trigger de perfil auto
 
 ### Poblar `api_fixture_id` (antes de activar el cron)
 
-El campo `matches.api_fixture_id` mapea cada partido al ID del proveedor de resultados. Hay dos opciones:
+El campo `matches.api_fixture_id` mapea cada partido al ID del proveedor de resultados.
 
-**Opción A (recomendada) — manual:**
-1. Regístrate en [football-data.org](https://www.football-data.org/client/register) (free tier, no necesitas tarjeta)
-2. Busca los fixtures del Mundial 2026 (`competition=WC`) y anota el ID de cada partido
-3. Ejecuta en Supabase SQL Editor:
-   ```sql
-   UPDATE public.matches SET api_fixture_id = 12345 WHERE id = 1;
-   -- Repite para los 72 partidos
-   ```
+`scripts/populate-fixture-ids.js` hace esto automáticamente: con **una sola petición** a
+`/v4/competitions/WC/matches`, empareja los 72 partidos de fase de grupos por equipos
+(traducidos ES↔EN) + fecha de kickoff, y escribe `api_fixture_id` en Supabase.
 
-**Opción B — fuzzy match automático:**
-Próximamente: script que consulta al proveedor y empareja por equipos + fecha.
+```bash
+# Vista previa (no escribe nada)
+node --env-file=.env.local scripts/populate-fixture-ids.js
+
+# Aplica los cambios a Supabase
+node --env-file=.env.local scripts/populate-fixture-ids.js --apply
+```
+
+Requiere `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` y `FOOTBALL_DATA_API_KEY` en `.env.local`.
+Solo necesita ejecutarse una vez (ya aplicado para esta instancia).
 
 ---
 
@@ -127,7 +132,7 @@ El cron está en `cron/` y es un **Node.js background worker** que Render ejecut
    | **Runtime** | Node |
    | **Build Command** | `npm install` |
    | **Start Command** | `node update-results.js` |
-   | **Schedule** | `*/10 * * * *` (cada 10 min) |
+   | **Schedule** | `*/5 * * * *` (cada 5 min) |
 
 5. En **Environment Variables**, agrega:
    - `SUPABASE_URL`
@@ -135,7 +140,22 @@ El cron está en `cron/` y es un **Node.js background worker** que Render ejecut
    - `PROVIDER` = `football-data`
    - `FOOTBALL_DATA_API_KEY`
 
-> El cron solo actúa sobre partidos cuyo kickoff ya pasó y que tengan `api_fixture_id` poblado. No escribe resultados parciales — solo cuando el proveedor reporta el partido como `FINISHED`.
+### Polling inteligente
+
+El cron respeta el límite de **10 req/min** del free tier de football-data.org así:
+
+1. Primero consulta Supabase (gratis) por partidos `pendiente`/`en_vivo` con `api_fixture_id`
+   y kickoff ya pasado. **Si no hay ninguno, termina sin llamar a la API** — la mayor parte
+   del día esto es 0 peticiones.
+2. Si hay partidos por revisar, hace **una sola petición bulk** a
+   `/v4/competitions/WC/matches?dateFrom=...&dateTo=...` cubriendo el rango de fechas
+   necesario, sin importar cuántos partidos estén en juego simultáneamente.
+3. Partidos `FINISHED` → `set_match_result()` (registra marcador, calcula `resultado`,
+   marca `finalizado`). Partidos `IN_PLAY`/`PAUSED` → marca `estado='en_vivo'` (la UI ya
+   muestra el badge "● EN VIVO").
+4. Si aun así llega un 429, reintenta con backoff respetando `Retry-After` (hasta 3 intentos).
+
+Con `*/5 * * * *` esto nunca excede ~1 petición cada 5 minutos durante los partidos.
 
 ### Cambiar de proveedor
 
@@ -159,9 +179,11 @@ Vercel (Next.js)
 Supabase (Postgres + Auth)
   │  service_role key
   ▼
-Render Cron (cada 10 min)
-  │  consulta football-data.org
-  └─ llama set_match_result() cuando un partido termina
+Render Cron (cada 5 min)
+  │  si hay partidos pendientes con kickoff pasado:
+  │    1 petición bulk a football-data.org (rango de fechas)
+  ├─ FINISHED  → set_match_result()  (resultado + leaderboard se recalculan solos)
+  └─ IN_PLAY   → estado='en_vivo'
 ```
 
 ---

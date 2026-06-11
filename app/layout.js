@@ -1,4 +1,5 @@
 import { Oswald } from 'next/font/google'
+import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
 const oswald = Oswald({
@@ -23,7 +24,10 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="es-MX" className={oswald.variable}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   )
 }
